@@ -1,3 +1,111 @@
+# 2.0
+
+### Improvements
+
+* [Policy composition](README.md#policy-composition) is now supported.
+* [A Policy SPI](README.md#policy-spi) is now available.
+* Async execution is now supported without requiring that a `ScheduledExecutorService` or `Scheduler` be configured. When no scheduler is configured, the `ForkJoinPool`'s common pool will be used by default.
+* `Fallback` now support async execution via `ofAsync`.
+* `CircuitBreaker` supports execution metrics (see below).
+* Strong typing based on result types is supported throughout the API.
+
+### Behavior Changes
+
+- `RetryPolicy` now has 3 max attempts by default.
+- `CircuitBreaker` now has a 1 minute delay by default.
+
+### JRE Changes
+
+- Java 8+ is now required
+
+### API Changes
+
+Failsafe 2.0 includes a few API changes from 1.x that were meant to consolidate behavior such as the execution APIs, which are now based on common `Policy` implementations, while adding some new features such as `Policy` composition.
+
+- Policies
+  - Policy implementations now take a type parameter `R` that represents the expected result type.
+  - Some of the time related policy configurations have been changed to use `Duration` instead of `long` + `TimeUnit`.
+- Policy configuration
+  - Multiple policies can no longer be configured by chaining multiple `Failsafe.with` calls. Instead they must be supplied in a single `Failsafe.with` call. This is was intentional to require users to consider the ordering of composed policies. See the README section on [policy composition](README.md#policy-composition) for more details.
+- Fallbacks
+  - Fallbacks must be wrapped in a `Fallback` instance via `Fallback.of`
+- Failsafe APIs
+  - `Supplier`s are now used instead of `Callable`s.
+  - `withFallback` is no longer supported. Instead, `Failsafe.with(fallback...)` should be used.
+- Async execution
+  - Async execution is now performed with the `getAsync`, `runAsync`, `getStageAsync`, etc. methods.
+  - Async API integration is now supported via the `getAsyncExecution`, `runAsyncExecution`, etc. methods.
+- Event listeners
+  - Event listeners now all consume a single `ExecutionEvent` object, which includes references to the result, failure, and other information.
+  - Event listeners that are specific to policies, such as `onRetry` for `RetryPolicy`, must now be configured through the policy instance. The top level `Failsafe` API only supports `onComplete`, `onSuccess`, and `onFailure`. Individual `Policy` implementations still support  `onSuccess` and `onFailure` in addition to policy specific events.
+  - The `Listeners` class was removed, since it was mostly intended for Java 6/7 users.
+  - The async event listener APIs were removed. Events will always be delivered in the same thread as the execution that they follow or preceed, including for async executions.
+- Java 8
+  - `java.time.Duration` is used instead of Failsafe's own `Duration` impl.
+  - `ChronoUnit` is used instead of `TimeUnit` in policies.
+- `ExecutionContext.getExecutions` is now `getAttemptCount`.
+- `Schedulers.of(ScheduledExecutorService)` was moved to the `Scheduler` interface.
+
+### API Additions
+
+- Event listeners
+  - The top level `Failsafe.onSuccess` event listener will only be called if *all* configured policies consider an execution to be successful, otherwise `onFailure` will be called. 
+- `CircuitBreaker`
+  - `preExecute` is now exposed to support standalone usage.
+  - Execution metrics are available via `getFailureCount`, `getFailureRatio`, `getSuccessCount`, and `getSuccessRatio`.
+
+### Bug Fixes
+
+* Issue #152 - Min/max delay was not being computed correctly
+
+# 1.1.0
+
+### Bug Fixes
+
+* Issue #115 - Jitter bigger than Delay causes a (random) failure at runtime
+* Issue #116 - Setting jitter without a delay works fine bug
+* Issue #123 - Ability to reset the jitterFactor
+
+### Improvements
+
+* Issue #110 - Added support for computed delays: `RetryPolicy.withDelay(DelayFunction)`
+* Issue #126 - Added support for random delays: `RetryPolicy.withDelay(1, 10, TimeUnit.MILLISECONDS)`
+
+# 1.0.5
+
+### Bug Fixes
+
+* Issue #97 - Should not increment exponential backoff time on first attempt
+* Issue #92 - `handleRetriesExceeded` called incorrectly.
+
+# 1.0.4
+
+### API Changes
+
+* Asynchronous execution attempts no longer throw `CircuitBreakerOpenException` if a configured `CircuitBreaker` is open when an execution is first attempted. Instead, the resulting `Future` is completed exceptionally with `CircuitBreakerOpenException`. See [issue #84](https://github.com/jhalterman/failsafe/issues/84).
+
+### Improvements
+
+* Issue #81 - Added single argument failure configuration to avoid varargs related warnings.
+
+# 1.0.3
+
+### Bug Fixes
+
+* Fixed #76 - Make sure AsyncExecution.completeOrRetry is called when Error is thrown.
+
+# 1.0.2
+
+### Bug Fixes
+
+* Fixed #75 - Incorrect future completion when a fallback is present.
+
+# 1.0.1
+
+### Changes
+
+* `FailsafeException` now has public constructors, for easier mocking and testing.
+
 # 1.0.0
 
 ### API Changes

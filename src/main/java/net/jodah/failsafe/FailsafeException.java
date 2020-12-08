@@ -16,7 +16,7 @@
 package net.jodah.failsafe;
 
 /**
- * Thrown when a synchronous Failsafe run() call fails with an exception. Use {@link Throwable#getCause()} to learn the
+ * Thrown when a synchronous Failsafe execution fails with an exception. Use {@link Throwable#getCause()} to learn the
  * cause of the failure.
  * 
  * @author Jonathan Halterman
@@ -24,10 +24,10 @@ package net.jodah.failsafe;
 public class FailsafeException extends RuntimeException {
   private static final long serialVersionUID = 1L;
 
-  FailsafeException() {
+  public FailsafeException() {
   }
 
-  FailsafeException(Throwable t) {
+  public FailsafeException(Throwable t) {
     super(t);
   }
 }

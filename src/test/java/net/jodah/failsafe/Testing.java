@@ -15,14 +15,23 @@
  */
 package net.jodah.failsafe;
 
-import java.lang.reflect.Field;
-import java.util.concurrent.Callable;
-import java.util.concurrent.atomic.AtomicReference;
-
 import net.jodah.failsafe.function.CheckedRunnable;
+import net.jodah.failsafe.function.CheckedSupplier;
 import net.jodah.failsafe.internal.CircuitState;
 
+import java.lang.reflect.Field;
+import java.util.concurrent.atomic.AtomicReference;
+
 public class Testing {
+  public static class ConnectException extends RuntimeException {
+  }
+
+  public interface Service {
+    boolean connect();
+
+    boolean disconnect();
+  }
+
   public static Throwable getThrowable(CheckedRunnable runnable) {
     try {
       runnable.run();
@@ -33,9 +42,9 @@ public class Testing {
     return null;
   }
 
-  public static <T> T ignoreExceptions(Callable<T> callable) {
+  public static <T> T ignoreExceptions(CheckedSupplier<T> supplier) {
     try {
-      return callable.call();
+      return supplier.get();
     } catch (Exception e) {
       return null;
     }
@@ -57,9 +66,6 @@ public class Testing {
 
   public static void runInThread(CheckedRunnable runnable) {
     new Thread(() -> ignoreExceptions(runnable)).start();
-  }
-
-  public static void noop() {
   }
 
   @SuppressWarnings("unchecked")

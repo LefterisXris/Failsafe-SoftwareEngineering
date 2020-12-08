@@ -17,83 +17,71 @@ package net.jodah.failsafe;
 
 import net.jodah.failsafe.internal.util.Assert;
 
+import java.util.function.Supplier;
+
 /**
  * Tracks executions and determines when an execution can be performed for a {@link RetryPolicy}.
- * 
+ *
  * @author Jonathan Halterman
  */
+@SuppressWarnings("WeakerAccess")
 public class Execution extends AbstractExecution {
   /**
-   * Creates a new Execution for the {@code circuitBreaker}.
-   * 
-   * @throws NullPointerException if {@code circuitBreaker} is null
+   * Creates a new {@link Execution} that will use the {@code policies} to handle failures. Policies are applied in
+   * reverse order, with the last policy being applied first.
+   *
+   * @throws NullPointerException if {@code policies} is null
+   * @throws IllegalArgumentException if {@code policies} is empty
    */
-  public Execution(CircuitBreaker circuitBreaker) {
-    super(new FailsafeConfig<Object, FailsafeConfig<Object, ?>>().with(circuitBreaker));
+  @SuppressWarnings("unchecked")
+  public Execution(Policy... policies) {
+    super(new FailsafeExecutor<>(policies));
   }
 
-  /**
-   * Creates a new Execution for the {@code retryPolicy}.
-   * 
-   * @throws NullPointerException if {@code retryPolicy} is null
-   */
-  public Execution(RetryPolicy retryPolicy) {
-    super(new FailsafeConfig<Object, FailsafeConfig<Object, ?>>().with(retryPolicy));
-  }
-
-  /**
-   * Creates a new Execution for the {@code retryPolicy} and {@code circuitBreaker}.
-   * 
-   * @throws NullPointerException if {@code retryPolicy} or {@code circuitBreaker} are null
-   */
-  public Execution(RetryPolicy retryPolicy, CircuitBreaker circuitBreaker) {
-    super(new FailsafeConfig<Object, FailsafeConfig<Object, FailsafeConfig<Object, ?>>>().with(retryPolicy)
-        .with(circuitBreaker));
-  }
-
-  Execution(FailsafeConfig<Object, ?> config) {
-    super(config);
+  @SuppressWarnings("unchecked")
+  Execution(FailsafeExecutor<?> executor) {
+    super((FailsafeExecutor<Object>) executor);
   }
 
   /**
    * Records an execution and returns true if a retry can be performed for the {@code result}, else returns false and
    * marks the execution as complete.
-   * 
+   *
    * @throws IllegalStateException if the execution is already complete
    */
   public boolean canRetryFor(Object result) {
-    return !complete(result, null, true);
+    return !postExecute(new ExecutionResult(result, null));
   }
 
   /**
    * Records an execution and returns true if a retry can be performed for the {@code result} or {@code failure}, else
    * returns false and marks the execution as complete.
-   * 
+   *
    * @throws IllegalStateException if the execution is already complete
    */
   public boolean canRetryFor(Object result, Throwable failure) {
-    return !complete(result, failure, true);
+    return !postExecute(new ExecutionResult(result, failure));
   }
 
   /**
    * Records an execution and returns true if a retry can be performed for the {@code failure}, else returns false and
    * marks the execution as complete.
-   * 
+   *
    * @throws NullPointerException if {@code failure} is null
    * @throws IllegalStateException if the execution is already complete
    */
   public boolean canRetryOn(Throwable failure) {
     Assert.notNull(failure, "failure");
-    return !complete(null, failure, true);
+    return !postExecute(new ExecutionResult(null, failure));
   }
 
   /**
-   * Records and completes the execution.
-   * 
+   * Records and completes the execution successfully.
+   *
    * @throws IllegalStateException if the execution is already complete
    */
   public void complete() {
-    complete(null, null, false);
+    postExecute(ExecutionResult.NONE);
   }
 
   /**
@@ -103,20 +91,32 @@ public class Execution extends AbstractExecution {
    * @throws IllegalStateException if the execution is already complete
    */
   public boolean complete(Object result) {
-    return complete(result, null, true);
+    return postExecute(new ExecutionResult(result, null));
   }
 
   /**
    * Records a failed execution and returns true if a retry can be performed for the {@code failure}, else returns false
    * and completes the execution.
-   * 
    * <p>
    * Alias of {@link #canRetryOn(Throwable)}
-   * 
+   *
    * @throws NullPointerException if {@code failure} is null
    * @throws IllegalStateException if the execution is already complete
    */
   public boolean recordFailure(Throwable failure) {
     return canRetryOn(failure);
+  }
+
+  /**
+   * Performs a synchronous execution.
+   */
+  ExecutionResult executeSync(Supplier<ExecutionResult> supplier) {
+    for (PolicyExecutor<Policy<Object>> policyExecutor : policyExecutors)
+      supplier = policyExecutor.supply(supplier);
+
+    ExecutionResult result = supplier.get();
+    completed = result.isComplete();
+    executor.handleComplete(result, this);
+    return result;
   }
 }

@@ -15,33 +15,37 @@
  */
 package net.jodah.failsafe;
 
-import net.jodah.failsafe.internal.util.Assert;
-
 /**
  * Simple, sophisticated failure handling.
- * 
+ *
  * @author Jonathan Halterman
  */
 public class Failsafe {
   /**
-   * Creates and returns a new SyncFailsafe instance that will perform executions and retries synchronously according to
-   * the {@code retryPolicy}.
-   * 
-   * @param <T> result type
-   * @throws NullPointerException if {@code retryPolicy} is null
+   * Creates and returns a new {@link FailsafeExecutor} instance that will handle failures according to the given {@code
+   * policies}. The {@code policies} are composed around an execution and will handle execution results in reverse, with
+   * the last policy being applied first. For example, consider:
+   * <p>
+   * <pre>
+   *   Failsafe.with(fallback, retryPolicy, circuitBreaker).get(supplier);
+   * </pre>
+   * </p>
+   * This results in the following internal composition when executing the {@code supplier} and handling its result:
+   * <p>
+   * <pre>
+   *   Fallback(RetryPolicy(CircuitBreaker(Supplier)))
+   * </pre>
+   * </p>
+   * This means the {@code CircuitBreaker} is first to evaluate the {@code Supplier}'s result, then the {@code
+   * RetryPolicy}, then the {@code Fallback}. Each policy makes its own determination as to whether the result
+   * represents a failure. This allows different policies to be used for handling different types of failures.
+   *
+   * @param <R> result type
+   * @throws NullPointerException if {@code policies} is null
+   * @throws IllegalArgumentException if {@code policies} is empty
    */
-  public static <T> SyncFailsafe<T> with(RetryPolicy retryPolicy) {
-    return new SyncFailsafe<T>(Assert.notNull(retryPolicy, "retryPolicy"));
-  }
-
-  /**
-   * Creates and returns a new SyncFailsafe instance that will perform executions and retries synchronously according to
-   * the {@code circuitBreaker}.
-   * 
-   * @param <T> result type
-   * @throws NullPointerException if {@code circuitBreaker} is null
-   */
-  public static <T> SyncFailsafe<T> with(CircuitBreaker circuitBreaker) {
-    return new SyncFailsafe<T>(Assert.notNull(circuitBreaker, "circuitBreaker"));
+  @SafeVarargs
+  public static <R, P extends Policy<R>> FailsafeExecutor<R> with(P... policies) {
+    return new FailsafeExecutor<>(policies);
   }
 }

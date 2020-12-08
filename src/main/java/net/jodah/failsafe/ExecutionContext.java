@@ -15,41 +15,39 @@
  */
 package net.jodah.failsafe;
 
-import java.util.concurrent.TimeUnit;
-
-import net.jodah.failsafe.util.Duration;
+import java.time.Duration;
 
 /**
  * Contextual execution information.
- * 
+ *
  * @author Jonathan Halterman
  */
 public class ExecutionContext {
-  final Duration startTime;
+  private final Duration startTime;
   /** Number of execution attempts */
-  volatile int executions;
+  volatile int attempts;
 
   ExecutionContext(Duration startTime) {
     this.startTime = startTime;
   }
 
-  ExecutionContext(ExecutionContext context) {
+  private ExecutionContext(ExecutionContext context) {
     this.startTime = context.startTime;
-    this.executions = context.executions;
+    this.attempts = context.attempts;
   }
 
   /**
    * Returns the elapsed time since initial execution began.
    */
   public Duration getElapsedTime() {
-    return new Duration(System.nanoTime() - startTime.toNanos(), TimeUnit.NANOSECONDS);
+    return Duration.ofNanos(System.nanoTime() - startTime.toNanos());
   }
 
   /**
-   * Gets the number of executions so far.
+   * Gets the number of execution attempts so far.
    */
-  public int getExecutions() {
-    return executions;
+  public int getAttemptCount() {
+    return attempts;
   }
 
   /**
@@ -59,7 +57,7 @@ public class ExecutionContext {
     return startTime;
   }
 
-  ExecutionContext copy() {
+  public ExecutionContext copy() {
     return new ExecutionContext(this);
   }
 }
