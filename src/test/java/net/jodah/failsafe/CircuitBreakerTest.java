@@ -1,6 +1,21 @@
+/*
+ * Copyright 2016 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License
+ */
 package net.jodah.failsafe;
 
-import static net.jodah.failsafe.Testing.shouldFail;
+import static net.jodah.failsafe.Asserts.assertThrows;
 import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertTrue;
 
@@ -59,40 +74,32 @@ public class CircuitBreakerTest {
   }
 
   public void shouldRequireValidDelay() {
-    shouldFail(() -> new CircuitBreaker().withDelay(5, null), NullPointerException.class);
-    shouldFail(() -> new CircuitBreaker().withDelay(-1, TimeUnit.MILLISECONDS), IllegalArgumentException.class);
+    assertThrows(() -> new CircuitBreaker().withDelay(5, null), NullPointerException.class);
+    assertThrows(() -> new CircuitBreaker().withDelay(-1, TimeUnit.MILLISECONDS), IllegalArgumentException.class);
   }
 
   public void shouldRequireValidTimeout() {
-    shouldFail(() -> new CircuitBreaker().withTimeout(5, null), NullPointerException.class);
-    shouldFail(() -> new CircuitBreaker().withTimeout(-1, TimeUnit.MILLISECONDS), IllegalArgumentException.class);
+    assertThrows(() -> new CircuitBreaker().withTimeout(5, null), NullPointerException.class);
+    assertThrows(() -> new CircuitBreaker().withTimeout(-1, TimeUnit.MILLISECONDS), IllegalArgumentException.class);
   }
-  
+
   public void shouldRequireValidFailureThreshold() {
-    shouldFail(() -> new CircuitBreaker().withFailureThreshold(0), IllegalArgumentException.class);
-    shouldFail(() -> new CircuitBreaker().withFailureThreshold(2, 2).withFailureThreshold(2),
-        IllegalStateException.class);
+    assertThrows(() -> new CircuitBreaker().withFailureThreshold(0), IllegalArgumentException.class);
   }
 
   public void shouldRequireValidFailureThresholdRatio() {
-    shouldFail(() -> new CircuitBreaker().withFailureThreshold(0, 2), IllegalArgumentException.class);
-    shouldFail(() -> new CircuitBreaker().withFailureThreshold(2, 0), IllegalArgumentException.class);
-    shouldFail(() -> new CircuitBreaker().withFailureThreshold(2, 1), IllegalArgumentException.class);
-    shouldFail(() -> new CircuitBreaker().withFailureThreshold(2).withFailureThreshold(2, 2),
-        IllegalStateException.class);
+    assertThrows(() -> new CircuitBreaker().withFailureThreshold(0, 2), IllegalArgumentException.class);
+    assertThrows(() -> new CircuitBreaker().withFailureThreshold(2, 0), IllegalArgumentException.class);
+    assertThrows(() -> new CircuitBreaker().withFailureThreshold(2, 1), IllegalArgumentException.class);
   }
 
   public void shouldRequireValidSuccessThreshold() {
-    shouldFail(() -> new CircuitBreaker().withSuccessThreshold(0), IllegalArgumentException.class);
-    shouldFail(() -> new CircuitBreaker().withSuccessThreshold(2, 2).withSuccessThreshold(2),
-        IllegalStateException.class);
+    assertThrows(() -> new CircuitBreaker().withSuccessThreshold(0), IllegalArgumentException.class);
   }
 
   public void shouldRequireValidSuccessThresholdRatio() {
-    shouldFail(() -> new CircuitBreaker().withSuccessThreshold(0, 2), IllegalArgumentException.class);
-    shouldFail(() -> new CircuitBreaker().withSuccessThreshold(2, 0), IllegalArgumentException.class);
-    shouldFail(() -> new CircuitBreaker().withSuccessThreshold(2, 1), IllegalArgumentException.class);
-    shouldFail(() -> new CircuitBreaker().withSuccessThreshold(2).withSuccessThreshold(2, 2),
-        IllegalStateException.class);
+    assertThrows(() -> new CircuitBreaker().withSuccessThreshold(0, 2), IllegalArgumentException.class);
+    assertThrows(() -> new CircuitBreaker().withSuccessThreshold(2, 0), IllegalArgumentException.class);
+    assertThrows(() -> new CircuitBreaker().withSuccessThreshold(2, 1), IllegalArgumentException.class);
   }
 }

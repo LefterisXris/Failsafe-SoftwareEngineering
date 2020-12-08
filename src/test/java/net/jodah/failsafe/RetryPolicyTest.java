@@ -1,3 +1,18 @@
+/*
+ * Copyright 2016 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License
+ */
 package net.jodah.failsafe;
 
 import static org.testng.Assert.assertEquals;
@@ -61,6 +76,10 @@ public class RetryPolicyTest {
     policy = new RetryPolicy().retryOn(Exception.class);
     assertTrue(policy.canRetryFor(null, new Exception()));
     assertTrue(policy.canRetryFor(null, new IllegalArgumentException()));
+    
+    policy = new RetryPolicy().retryOn(RuntimeException.class);
+    assertTrue(policy.canRetryFor(null, new IllegalArgumentException()));
+    assertFalse(policy.canRetryFor(null, new Exception()));
 
     policy = new RetryPolicy().retryOn(IllegalArgumentException.class, IOException.class);
     assertTrue(policy.canRetryFor(null, new IllegalArgumentException()));
@@ -74,10 +93,11 @@ public class RetryPolicyTest {
     assertFalse(policy.canRetryFor(null, new IllegalStateException()));
   }
 
-  public void testCanRetryFOrResult() {
+  public void testCanRetryForResult() {
     RetryPolicy policy = new RetryPolicy().retryWhen(10);
     assertTrue(policy.canRetryFor(10, null));
     assertFalse(policy.canRetryFor(5, null));
+    assertTrue(policy.canRetryFor(5, new Exception()));
   }
 
   public void testCanAbortForNull() {
@@ -169,7 +189,7 @@ public class RetryPolicyTest {
 
     RetryPolicy rp2 = rp.copy();
     assertEquals(rp.getDelay().toNanos(), rp2.getDelay().toNanos());
-    assertEquals(rp.getDelayMultiplier(), rp2.getDelayMultiplier());
+    assertEquals(rp.getDelayFactor(), rp2.getDelayFactor());
     assertEquals(rp.getMaxDelay().toNanos(), rp2.getMaxDelay().toNanos());
     assertEquals(rp.getMaxDuration().toNanos(), rp2.getMaxDuration().toNanos());
     assertEquals(rp.getMaxRetries(), rp2.getMaxRetries());

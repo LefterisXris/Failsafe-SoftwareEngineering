@@ -1,3 +1,95 @@
+# 1.0.0
+
+### API Changes
+
+* Failsafe will now only throw `FailsafeException` when an execution fails with a checked `Exception`. See [issue #66](https://github.com/jhalterman/failsafe/issues/66) for details.
+
+# 0.9.5
+
+### Bug Fixes
+
+* Fixed #59 - Classloading issue on Java 6/7.
+
+# 0.9.4
+
+### Bug Fixes
+
+* Fixed #63 - Proper handling of thread interrupts during synchronous execution delays.
+* Fixed #54 - Added hashCode and equals implementations to Duration.
+
+# 0.9.3
+
+### New Features
+
+* Added OSGi support.
+* `FailsafeFutuer.cancel` calls completion handlers. `.get` after cancel throws `CancellationException`.
+
+### Bug Fixes
+
+* Fixed #52 - FailsafeFuture.cancel not working as expected.
+* Fixed #55 - Fallback always called for asynchronous executions.
+
+### API Changes
+
+* `CircuitBreakerOpenException` now extends `FailsafeException`.
+
+# 0.9.2
+
+### New Features
+
+* Various fallback and listener API additions and improvements
+
+# 0.9.1
+
+### New Features
+
+* Added support for retry delay [jitter](https://github.com/jhalterman/failsafe#retry-policies).
+
+# 0.9.0
+
+### New Features
+
+* Added support for [fallbacks](https://github.com/jhalterman/failsafe#fallbacks).
+
+### Bug Fixes
+
+* Fixed issue #36 - Failed attempt listener not always called on completion.
+* Fixed issue #34 - CircuitBreaker should default to closed state.
+
+# 0.8.3
+
+### Bug Fixes
+
+* Fixed #33 - `CircuitBreaker` not decrementing currentExections when under load
+
+# 0.8.2
+
+### New Features
+
+* Added support for `onRetriesExceeded` listeners.
+* `RetryPolicy` can be extended (it's no longer marked as final)
+
+### Bug Fixes
+
+* Abort should not call failure listeners.
+
+# 0.8.1
+
+### New Features
+
+* Simplified listeners API.
+* Added support for failure listeners via `Failsafe.with(...).onFailure(e -> {})`.
+* Added `onAbort` listeners.
+* Added additional async listeners.
+* `RetryPolicy` and `CircuitBreaker` now support multiple configuration rules. Ex: `new RetryPolicy().retryWhen(null).retryWhen("")`. If any rule matches then the policy is matched.
+
+### API Changes
+
+* Added top level support for listener registration via `Failsafe.with(...).onXxx`. The `Listeners` class is now only meant for Java 6 and 7 usage via method overrides.
+* Removed listener registration from `Listeners` class.
+* Removed `AsyncListeners` class. 
+* Removed listener registration from `FailsafeFuture` class.
+
 # 0.8.0
 
 ### New Features

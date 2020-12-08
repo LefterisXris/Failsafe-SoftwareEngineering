@@ -1,3 +1,18 @@
+/*
+ * Copyright 2016 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License
+ */
 package net.jodah.failsafe;
 
 import java.util.concurrent.Callable;
@@ -15,19 +30,17 @@ import net.jodah.failsafe.util.concurrent.Scheduler;
 public final class AsyncExecution extends AbstractExecution {
   private final Callable<Object> callable;
   private final FailsafeFuture<Object> future;
-  private final Listeners<Object> listeners;
   private final Scheduler scheduler;
   volatile boolean completeCalled;
   volatile boolean retryCalled;
 
   @SuppressWarnings("unchecked")
-  <T> AsyncExecution(Callable<T> callable, RetryPolicy retryPolicy, CircuitBreaker circuitBreaker, Scheduler scheduler,
-      FailsafeFuture<T> future, Listeners<?> listeners) {
-    super(retryPolicy, circuitBreaker);
+  <T> AsyncExecution(Callable<T> callable, Scheduler scheduler, FailsafeFuture<T> future,
+      FailsafeConfig<Object, ?> config) {
+    super(config);
     this.callable = (Callable<Object>) callable;
     this.scheduler = scheduler;
     this.future = (FailsafeFuture<Object>) future;
-    this.listeners = (Listeners<Object>) listeners;
   }
 
   /**
@@ -114,14 +127,17 @@ public final class AsyncExecution extends AbstractExecution {
    * flags, and calling the retry listeners.
    */
   void before() {
-    if (circuitBreaker != null && !circuitBreaker.allowsExecution()) {
+    if (config.circuitBreaker != null && !config.circuitBreaker.allowsExecution()) {
       completed = true;
-      future.complete(null, new CircuitBreakerOpenException(), false);
+      Exception failure = new CircuitBreakerOpenException();
+      if (config != null)
+        config.handleComplete(null, failure, this, false);
+      future.complete(null, failure, config.fallback, false);
       return;
     }
 
-    if (completeCalled && listeners != null)
-      listeners.handleRetry(lastResult, lastFailure, listeners instanceof AsyncListeners ? copy() : this, scheduler);
+    if (completeCalled && config != null)
+      config.handleRetry(lastResult, lastFailure, this);
 
     super.before();
     completeCalled = false;
@@ -134,22 +150,16 @@ public final class AsyncExecution extends AbstractExecution {
    * @throws IllegalStateException if the execution is already complete
    */
   @Override
-  synchronized boolean complete(Object result, Throwable failure, boolean checkArgs) {
-    if (!completeCalled) {
-      super.complete(result, failure, checkArgs);
+  boolean complete(Object result, Throwable failure, boolean checkArgs) {
+    synchronized (future) {
+      if (!completeCalled) {
+        if (super.complete(result, failure, checkArgs))
+          future.complete(result, failure, config.fallback, success);
+        completeCalled = true;
+      }
 
-      // Handle failure
-      if (!success && listeners != null)
-        listeners.handleFailedAttempt(result, failure, this, scheduler);
-
-      // Handle completed
-      if (completed)
-        future.complete(result, failure, success);
-
-      completeCalled = true;
+      return completed;
     }
-
-    return completed;
   }
 
   /**
@@ -158,17 +168,21 @@ public final class AsyncExecution extends AbstractExecution {
    * @throws IllegalStateException if the execution is already complete
    */
   @SuppressWarnings({ "unchecked", "rawtypes" })
-  synchronized boolean completeOrRetry(Object result, Throwable failure) {
-    if (!complete(result, failure, true) && !future.isDone() && !future.isCancelled()) {
-      try {
-        future.setFuture((Future) scheduler.schedule(callable, waitNanos, TimeUnit.NANOSECONDS));
-        return true;
-      } catch (Throwable t) {
-        failure = t;
-        future.complete(null, failure, false);
+  boolean completeOrRetry(Object result, Throwable failure) {
+    synchronized (future) {
+      if (!complete(result, failure, true) && !future.isDone() && !future.isCancelled()) {
+        try {
+          future.inject((Future) scheduler.schedule(callable, delayNanos, TimeUnit.NANOSECONDS));
+          return true;
+        } catch (Throwable t) {
+          failure = t;
+          if (config != null)
+            config.handleComplete(null, t, this, false);
+          future.complete(null, failure, config.fallback, false);
+        }
       }
-    }
 
-    return false;
+      return false;
+    }
   }
 }

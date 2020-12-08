@@ -1,5 +1,21 @@
+/*
+ * Copyright 2016 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License
+ */
 package net.jodah.failsafe;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
@@ -15,8 +31,8 @@ import net.jodah.failsafe.internal.ClosedState;
 import net.jodah.failsafe.internal.HalfOpenState;
 import net.jodah.failsafe.internal.OpenState;
 import net.jodah.failsafe.internal.util.Assert;
-import net.jodah.failsafe.internal.util.Ratio;
 import net.jodah.failsafe.util.Duration;
+import net.jodah.failsafe.util.Ratio;
 
 /**
  * A circuit breaker that temporarily halts execution when configurable thresholds are exceeded.
@@ -24,8 +40,6 @@ import net.jodah.failsafe.util.Duration;
  * @author Jonathan Halterman
  */
 public class CircuitBreaker {
-  private static final Object DEFAULT_VALUE = new Object();
-
   /** Writes guarded by "this" */
   private final AtomicReference<CircuitState> state = new AtomicReference<CircuitState>();
   private final AtomicInteger currentExecutions = new AtomicInteger();
@@ -37,23 +51,21 @@ public class CircuitBreaker {
   };
   private Duration delay = Duration.NONE;
   private Duration timeout;
-  private Integer failureThreshold;
-  private Ratio failureThresholdRatio;
-  private Integer successThreshold;
-  private Ratio successThresholdRatio;
-  private List<Class<? extends Throwable>> failures;
-  private Predicate<Throwable> failurePredicate;
-  private Object failureValue = DEFAULT_VALUE;
-  private Predicate<Object> resultPredicate;
-  private BiPredicate<Object, Throwable> completionPredicate;
+  private Ratio failureThreshold;
+  private Ratio successThreshold;
+  /** Indicates whether failures are checked by a configured failure condition */
+  private boolean failuresChecked;
+  private List<BiPredicate<Object, Throwable>> failureConditions;
   CheckedRunnable onOpen;
   CheckedRunnable onHalfOpen;
   CheckedRunnable onClose;
 
   /**
-   * Creates a Circuit that opens after a single failure, closes after a single success, and has no delay.
+   * Creates a Circuit that opens after a single failure, closes after a single success, and has no delay by default.
    */
   public CircuitBreaker() {
+    failureConditions = new ArrayList<BiPredicate<Object, Throwable>>();
+    state.set(new ClosedState(this));
   }
 
   /**
@@ -90,7 +102,8 @@ public class CircuitBreaker {
   @SuppressWarnings("unchecked")
   public <T> CircuitBreaker failIf(BiPredicate<T, ? extends Throwable> completionPredicate) {
     Assert.notNull(completionPredicate, "completionPredicate");
-    this.completionPredicate = (BiPredicate<Object, Throwable>) completionPredicate;
+    failuresChecked = true;
+    failureConditions.add((BiPredicate<Object, Throwable>) completionPredicate);
     return this;
   }
 
@@ -99,10 +112,9 @@ public class CircuitBreaker {
    * 
    * @throws NullPointerException if {@code resultPredicate} is null
    */
-  @SuppressWarnings("unchecked")
   public <T> CircuitBreaker failIf(Predicate<T> resultPredicate) {
     Assert.notNull(resultPredicate, "resultPredicate");
-    this.resultPredicate = (Predicate<Object>) resultPredicate;
+    failureConditions.add(Predicates.resultPredicateFor(resultPredicate));
     return this;
   }
 
@@ -116,8 +128,7 @@ public class CircuitBreaker {
   public CircuitBreaker failOn(Class<? extends Throwable>... failures) {
     Assert.notNull(failures, "failures");
     Assert.isTrue(failures.length > 0, "failures cannot be empty");
-    this.failures = Arrays.asList(failures);
-    return this;
+    return failOn(Arrays.asList(failures));
   }
 
   /**
@@ -129,7 +140,8 @@ public class CircuitBreaker {
   public CircuitBreaker failOn(List<Class<? extends Throwable>> failures) {
     Assert.notNull(failures, "failures");
     Assert.isTrue(!failures.isEmpty(), "failures cannot be empty");
-    this.failures = failures;
+    failuresChecked = true;
+    failureConditions.add(Predicates.failurePredicateFor(failures));
     return this;
   }
 
@@ -138,10 +150,10 @@ public class CircuitBreaker {
    * 
    * @throws NullPointerException if {@code failurePredicate} is null
    */
-  @SuppressWarnings("unchecked")
   public CircuitBreaker failOn(Predicate<? extends Throwable> failurePredicate) {
     Assert.notNull(failurePredicate, "failurePredicate");
-    this.failurePredicate = (Predicate<Throwable>) failurePredicate;
+    failuresChecked = true;
+    failureConditions.add(Predicates.failurePredicateFor(failurePredicate));
     return this;
   }
 
@@ -149,7 +161,7 @@ public class CircuitBreaker {
    * Specifies that a failure should be recorded if the execution result matches the {@code result}.
    */
   public CircuitBreaker failWhen(Object result) {
-    this.failureValue = result;
+    failureConditions.add(Predicates.resultPredicateFor(result));
     return this;
   }
 
@@ -163,50 +175,32 @@ public class CircuitBreaker {
   }
 
   /**
-   * Returns the number of successive failures that must occur when in a closed state in order to open the circuit else
-   * null if none has been configured.
+   * Gets the ratio of successive failures that must occur when in a closed state in order to open the circuit else
+   * {@code null} if none has been configured.
    * 
    * @see #withFailureThreshold(int)
-   */
-  public Integer getFailureThreshold() {
-    return failureThreshold;
-  }
-
-  /**
-   * Gets the ratio of successive failures that must occur when in a closed state in order to open the circuit.
-   * 
    * @see #withFailureThreshold(int, int)
    */
-  public Ratio getFailureThresholdRatio() {
-    return failureThresholdRatio;
+  public Ratio getFailureThreshold() {
+    return failureThreshold;
   }
 
   /**
    * Gets the state of the circuit.
    */
   public State getState() {
-    CircuitState circuitState = state.get();
-    return circuitState == null ? State.CLOSED : circuitState.getState();
-  }
-
-  /**
-   * Returns the number of successive successful executions that must occur when in a half-open state in order to close
-   * the circuit else null if none has been configured.
-   * 
-   * @see #withSuccessThreshold(int)
-   */
-  public Integer getSuccessThreshold() {
-    return successThreshold;
+    return state.get().getState();
   }
 
   /**
    * Gets the ratio of successive successful executions that must occur when in a half-open state in order to close the
-   * circuit.
+   * circuit else {@code null} if none has been configured.
    * 
+   * @see #withSuccessThreshold(int)
    * @see #withSuccessThreshold(int, int)
    */
-  public Ratio getSuccessThresholdRatio() {
-    return successThresholdRatio;
+  public Ratio getSuccessThreshold() {
+    return successThreshold;
   }
 
   /**
@@ -233,8 +227,8 @@ public class CircuitBreaker {
   }
 
   /**
-   * Returns whether the circuit breaker considers the {@code result} or {@code throwable} a failure based on its
-   * failure configuration.
+   * Returns whether the circuit breaker considers the {@code result} or {@code throwable} a failure based on the
+   * configured conditions, or if {@code failure} is not null it is not checked by any configured condition.
    * 
    * @see #failIf(BiPredicate)
    * @see #failIf(Predicate)
@@ -243,31 +237,21 @@ public class CircuitBreaker {
    * @see #failOn(Predicate)
    * @see #failWhen(Object)
    */
-  public boolean isFailure(Object result, Throwable throwable) {
-    // Check completion conditions
-    if (completionPredicate != null && completionPredicate.test(result, throwable))
-      return true;
-
-    // Check failure condition(s)
-    if (throwable != null) {
-      if (failurePredicate != null && failurePredicate.test(throwable))
+  public boolean isFailure(Object result, Throwable failure) {
+    for (BiPredicate<Object, Throwable> predicate : failureConditions) {
+      if (predicate.test(result, failure))
         return true;
-      if (failures != null)
-        for (Class<? extends Throwable> failureType : failures)
-          if (failureType.isAssignableFrom(throwable.getClass()))
-            return true;
-
-      // Retry if the failure was not examined
-      return completionPredicate == null && failurePredicate == null && failures == null;
     }
 
-    // Check result condition(s)
-    if (resultPredicate != null && resultPredicate.test(result))
-      return true;
-    if (!DEFAULT_VALUE.equals(failureValue))
-      return failureValue == null ? result == null : failureValue.equals(result);
+    // Return true if the failure is not checked by a configured condition
+    return failure != null && !failuresChecked;
+  }
 
-    return false;
+  /**
+   * Returns whether the circuit is half open.
+   */
+  public boolean isHalfOpen() {
+    return State.HALF_OPEN.equals(getState());
   }
 
   /**
@@ -329,9 +313,9 @@ public class CircuitBreaker {
    * Records an execution success.
    */
   public void recordSuccess() {
-    CircuitState circuitState = state.get();
-    if (state != null) {
-      circuitState.recordSuccess();
+    try {
+      state.get().recordSuccess();
+    } finally {
       currentExecutions.decrementAndGet();
     }
   }
@@ -355,19 +339,13 @@ public class CircuitBreaker {
   }
 
   /**
-   * Sets the number of successive failures that must occur when in a closed state in order to open the circuit. 0
-   * represents no threshold.
+   * Sets the number of successive failures that must occur when in a closed state in order to open the circuit.
    * 
    * @throws IllegalArgumentException if {@code failureThresh} < 1
-   * @throws IllegalStateException if a failure ratio has already been configured via
-   *           {@link #withFailureThreshold(int, int)}
    */
   public CircuitBreaker withFailureThreshold(int failureThreshold) {
     Assert.isTrue(failureThreshold >= 1, "failureThreshold must be greater than or equal to 1");
-    Assert.state(failureThresholdRatio == null,
-        "failure threshold and failure threshold ratio cannot both be configured");
-    this.failureThreshold = failureThreshold;
-    return this;
+    return withFailureThreshold(failureThreshold, failureThreshold);
   }
 
   /**
@@ -379,31 +357,25 @@ public class CircuitBreaker {
    * @param executions The number of executions to measure the {@code failures} against
    * @throws IllegalArgumentException if {@code failures} < 1, {@code executions} < 1, or {@code failures} is <
    *           {@code executions}
-   * @throws IllegalStateException if a failure ratio has already been configured via {@link #withFailureThreshold(int)}
    */
-  public CircuitBreaker withFailureThreshold(int failures, int executions) {
+  public synchronized CircuitBreaker withFailureThreshold(int failures, int executions) {
     Assert.isTrue(failures >= 1, "failures must be greater than or equal to 1");
     Assert.isTrue(executions >= 1, "executions must be greater than or equal to 1");
     Assert.isTrue(executions >= failures, "executions must be greater than or equal to failures");
-    Assert.state(failureThreshold == null, "failure threshold and failure threshold ratio cannot both be configured");
-    this.failureThresholdRatio = new Ratio(failures, executions);
+    this.failureThreshold = new Ratio(failures, executions);
+    state.get().setFailureThreshold(failureThreshold);
     return this;
   }
 
   /**
    * Sets the number of successive successful executions that must occur when in a half-open state in order to close the
-   * circuit. 0 represents no threshold.
+   * circuit, else the circuit is re-opened when a failure occurs.
    * 
    * @throws IllegalArgumentException if {@code successThreshold} < 1
-   * @throws IllegalStateException if a success ratio has already been configured via
-   *           {@link #withSuccessThreshold(int, int)}
    */
   public CircuitBreaker withSuccessThreshold(int successThreshold) {
     Assert.isTrue(successThreshold >= 1, "successThreshold must be greater than or equal to 1");
-    Assert.state(successThresholdRatio == null,
-        "success threshold and success threshold ratio cannot both be configured");
-    this.successThreshold = successThreshold;
-    return this;
+    return withSuccessThreshold(successThreshold, successThreshold);
   }
 
   /**
@@ -415,20 +387,19 @@ public class CircuitBreaker {
    * @param executions The number of executions to measure the {@code successes} against
    * @throws IllegalArgumentException if {@code successes} < 1, {@code executions} < 1, or {@code successes} is <
    *           {@code executions}
-   * @throws IllegalStateException if a success threshold has already been configured via
-   *           {@link #withSuccessThreshold(int)}
    */
-  public CircuitBreaker withSuccessThreshold(int successes, int executions) {
+  public synchronized CircuitBreaker withSuccessThreshold(int successes, int executions) {
     Assert.isTrue(successes >= 1, "successes must be greater than or equal to 1");
     Assert.isTrue(executions >= 1, "executions must be greater than or equal to 1");
     Assert.isTrue(executions >= successes, "executions must be greater than or equal to successes");
-    Assert.state(successThreshold == null, "success threshold and success threshold ratio cannot both be configured");
-    this.successThresholdRatio = new Ratio(successes, executions);
+    this.successThreshold = new Ratio(successes, executions);
+    state.get().setSuccessThreshold(successThreshold);
     return this;
   }
 
   /**
-   * Sets the {@code timeout} for executions. Executions that exceed this timeout are recorded as failures.
+   * Sets the {@code timeout} for executions. Executions that exceed this timeout are not interrupted, but are recorded
+   * as failures once they naturally complete.
    * 
    * @throws NullPointerException if {@code timeUnit} is null
    * @throws IllegalArgumentException if {@code timeout} <= 0
@@ -440,38 +411,30 @@ public class CircuitBreaker {
     return this;
   }
 
-  /**
-   * Initializes the circuit prior to use.
-   */
-  synchronized void initialize() {
-    if (state.get() == null)
-      state.set(new ClosedState(this));
+  void before() {
+    currentExecutions.incrementAndGet();
   }
 
   /**
    * Records an execution failure.
    */
   void recordFailure() {
-    CircuitState circuitState = state.get();
-    if (state != null) {
-      circuitState.recordFailure();
+    try {
+      state.get().recordFailure();
+    } finally {
       currentExecutions.decrementAndGet();
     }
   }
 
   void recordResult(Object result, Throwable failure) {
-    CircuitState circuitState = state.get();
-    if (state != null) {
+    try {
       if (isFailure(result, failure))
-        circuitState.recordFailure();
+        state.get().recordFailure();
       else
-        circuitState.recordSuccess();
+        state.get().recordSuccess();
+    } finally {
       currentExecutions.decrementAndGet();
     }
-  }
-
-  void before() {
-    currentExecutions.incrementAndGet();
   }
 
   /**

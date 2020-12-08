@@ -1,86 +1,119 @@
+/*
+ * Copyright 2016 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License
+ */
 package net.jodah.failsafe;
 
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
-import net.jodah.failsafe.AsyncListeners.AsyncCtxResultListener;
-import net.jodah.failsafe.AsyncListeners.AsyncResultListener;
-import net.jodah.failsafe.event.ContextualResultListener;
-import net.jodah.failsafe.event.ContextualSuccessListener;
-import net.jodah.failsafe.event.ResultListener;
-import net.jodah.failsafe.event.SuccessListener;
+import net.jodah.failsafe.function.CheckedBiFunction;
 import net.jodah.failsafe.internal.util.Assert;
 import net.jodah.failsafe.internal.util.ReentrantCircuit;
-import net.jodah.failsafe.util.concurrent.Scheduler;
 
 /**
- * The future result of an asynchronous execution.
+ * The future result of an asynchronous Failsafe execution.
  * 
  * @author Jonathan Halterman
  * @param <T> result type
  */
 public class FailsafeFuture<T> implements Future<T> {
   private final ReentrantCircuit circuit = new ReentrantCircuit();
-  private final Scheduler scheduler;
-  private ExecutionContext context;
+  private final FailsafeConfig<T, ?> config;
+  private ExecutionContext execution;
+  private java.util.concurrent.CompletableFuture<T> completableFuture;
+
+  // Mutable state
   private volatile Future<T> delegate;
   private volatile boolean done;
   private volatile boolean cancelled;
-  private volatile boolean success;
   private volatile T result;
   private volatile Throwable failure;
 
-  // Listeners
-  private final Listeners<T> listeners;
-  private volatile AsyncResultListener<T> asyncCompleteListener;
-  private volatile AsyncCtxResultListener<T> asyncCtxCompleteListener;
-  private volatile AsyncResultListener<T> asyncFailureListener;
-  private volatile AsyncCtxResultListener<T> asyncCtxFailureListener;
-  private volatile AsyncResultListener<T> asyncSuccessListener;
-  private volatile AsyncCtxResultListener<T> asyncCtxSuccessListener;
-
-  FailsafeFuture(Scheduler scheduler, Listeners<T> listeners) {
-    this.scheduler = scheduler;
-    this.listeners = listeners == null ? new Listeners<T>() : listeners;
+  FailsafeFuture(FailsafeConfig<T, ?> config) {
+    this.config = config;
     circuit.open();
   }
 
-  static <T> FailsafeFuture<T> of(final java.util.concurrent.CompletableFuture<T> future, Scheduler scheduler,
-      Listeners<T> listeners) {
-    Assert.notNull(future, "future");
-    Assert.notNull(scheduler, "scheduler");
-    return new FailsafeFuture<T>(scheduler, listeners).onComplete(new ResultListener<T, Throwable>() {
-      @Override
-      public void onResult(T result, Throwable failure) {
-        if (failure == null)
-          future.complete(result);
-        else
-          future.completeExceptionally(failure);
-      }
-    });
-  }
-
+  /**
+   * Attempts to cancel this execution. This attempt will fail if the execution has already completed, has already been
+   * cancelled, or could not be cancelled for some other reason. If successful, and this execution has not started when
+   * {@code cancel} is called, this execution should never run. If the execution has already started, then the
+   * {@code mayInterruptIfRunning} parameter determines whether the thread executing this task should be interrupted in
+   * an attempt to stop the execution.
+   *
+   * <p>
+   * After this method returns, subsequent calls to {@link #isDone} will always return {@code true}. Subsequent calls to
+   * {@link #isCancelled} will always return {@code true} if this method returned {@code true}.
+   *
+   * @param mayInterruptIfRunning {@code true} if the thread executing this execution should be interrupted; otherwise,
+   *          in-progress executions are allowed to complete
+   * @return {@code false} if the execution could not be cancelled, typically because it has already completed normally;
+   *         {@code true} otherwise
+   */
   @Override
   public synchronized boolean cancel(boolean mayInterruptIfRunning) {
-    boolean result = delegate.cancel(mayInterruptIfRunning);
+    if (done)
+      return false;
+
+    boolean cancelResult = delegate.cancel(mayInterruptIfRunning);
+    failure = new CancellationException();
     cancelled = true;
-    circuit.close();
-    return result;
+    config.handleComplete(null, failure, execution, false);
+    complete(null, failure, config.fallback, false);
+    return cancelResult;
   }
 
+  /**
+   * Waits if necessary for the execution to complete, and then returns its result.
+   *
+   * @return the execution result
+   * @throws CancellationException if the execution was cancelled
+   * @throws ExecutionException if the execution threw an exception
+   * @throws InterruptedException if the current thread was interrupted while waiting
+   */
   @Override
   public T get() throws InterruptedException, ExecutionException {
     circuit.await();
-    if (failure != null)
+    if (failure != null) {
+      if (failure instanceof CancellationException)
+        throw (CancellationException) failure;
       throw new ExecutionException(failure);
+    }
     return result;
   }
 
+  /**
+   * Waits if necessary for at most the given time for the execution to complete, and then returns its result, if
+   * available.
+   *
+   * @param timeout the maximum time to wait
+   * @param unit the time unit of the timeout argument
+   * @return the execution result
+   * @throws CancellationException if the execution was cancelled
+   * @throws ExecutionException if the execution threw an exception
+   * @throws InterruptedException if the current thread was interrupted while waiting
+   * @throws TimeoutException if the wait timed out
+   * @throws NullPointerException if {@code unit} is null
+   * @throws IllegalArgumentException if {@code timeout} is < 0
+   */
   @Override
   public T get(long timeout, TimeUnit unit) throws InterruptedException, ExecutionException, TimeoutException {
+    Assert.isTrue(timeout >= 0, "timeout cannot be negative");
     if (!circuit.await(timeout, Assert.notNull(unit, "unit")))
       throw new TimeoutException();
     if (failure != null)
@@ -88,215 +121,67 @@ public class FailsafeFuture<T> implements Future<T> {
     return result;
   }
 
+  /**
+   * Returns {@code true} if this execution was cancelled before it completed normally.
+   *
+   * @return {@code true} if this execution was cancelled before it completed
+   */
   @Override
   public boolean isCancelled() {
     return cancelled;
   }
 
+  /**
+   * Returns {@code true} if this execution completed.
+   *
+   * Completion may be due to normal termination, an exception, or cancellation -- in all of these cases, this method
+   * will return {@code true}.
+   *
+   * @return {@code true} if this execution completed
+   */
   @Override
   public boolean isDone() {
     return done;
   }
 
-  /**
-   * Registers the {@code listener} to be called when an execution is completed.
-   */
-  public synchronized FailsafeFuture<T> onComplete(ContextualResultListener<? super T, ? extends Throwable> listener) {
-    listeners.onComplete(listener);
+  synchronized void complete(T result, Throwable failure, CheckedBiFunction<T, Throwable, T> fallback,
+      boolean success) {
     if (done)
-      listeners.handleComplete(result, failure, context);
-    return this;
-  }
+      return;
 
-  /**
-   * Registers the {@code listener} to be called when an execution is completed.
-   */
-  public synchronized FailsafeFuture<T> onComplete(ResultListener<? super T, ? extends Throwable> listener) {
-    listeners.onComplete(listener);
-    if (done)
-      listeners.handleComplete(result, failure);
-    return this;
-  }
+    if (fallback == null) {
+      this.result = result;
+      this.failure = failure;
+    } else if (!success) {
+      try {
+        this.result = fallback.apply(result, failure);
+      } catch (Throwable fallbackFailure) {
+        this.failure = fallbackFailure;
+      }
+    }
 
-  /**
-   * Registers the {@code listener} to be called asynchronously when an execution is completed.
-   */
-  public synchronized FailsafeFuture<T> onCompleteAsync(
-      ContextualResultListener<? super T, ? extends Throwable> listener) {
-    call(done, asyncCtxCompleteListener = new AsyncCtxResultListener<T>(listener));
-    return this;
-  }
-
-  /**
-   * Registers the {@code listener} to be called asynchronously when an execution is completed.
-   */
-  public synchronized FailsafeFuture<T> onCompleteAsync(
-      ContextualResultListener<? super T, ? extends Throwable> listener, ExecutorService executor) {
-    call(done, asyncCtxCompleteListener = new AsyncCtxResultListener<T>(listener, executor));
-    return this;
-  }
-
-  /**
-   * Registers the {@code listener} to be called asynchronously when an execution is completed.
-   */
-  public synchronized FailsafeFuture<T> onCompleteAsync(ResultListener<? super T, ? extends Throwable> listener) {
-    call(done, asyncCompleteListener = new AsyncResultListener<T>(listener));
-    return this;
-  }
-
-  /**
-   * Registers the {@code listener} to be called asynchronously when an execution is completed.
-   */
-  public synchronized FailsafeFuture<T> onCompleteAsync(ResultListener<? super T, ? extends Throwable> listener,
-      ExecutorService executor) {
-    call(done, asyncCompleteListener = new AsyncResultListener<T>(listener, executor));
-    return this;
-  }
-
-  /**
-   * Registers the {@code listener} to be called when the retry policy is exceeded and the result is a failure.
-   */
-  public synchronized FailsafeFuture<T> onFailure(ContextualResultListener<? super T, ? extends Throwable> listener) {
-    listeners.onFailure(listener);
-    if (done && !success)
-      listeners.handleFailure(result, failure, context);
-    return this;
-  }
-
-  /**
-   * Registers the {@code listener} to be called when the retry policy is exceeded and the result is a failure.
-   */
-  public synchronized FailsafeFuture<T> onFailure(ResultListener<? super T, ? extends Throwable> listener) {
-    listeners.onFailure(listener);
-    if (done && !success)
-      listeners.handleFailure(result, failure);
-    return this;
-  }
-
-  /**
-   * Registers the {@code listener} to be called asynchronously when the retry policy is exceeded and the result is a
-   * failure.
-   */
-  public synchronized FailsafeFuture<T> onFailureAsync(
-      ContextualResultListener<? super T, ? extends Throwable> listener) {
-    call(done && !success, asyncCtxFailureListener = new AsyncCtxResultListener<T>(listener));
-    return this;
-  }
-
-  /**
-   * Registers the {@code listener} to be called asynchronously when the retry policy is exceeded and the result is a
-   * failure.
-   */
-  public synchronized FailsafeFuture<T> onFailureAsync(
-      ContextualResultListener<? super T, ? extends Throwable> listener, ExecutorService executor) {
-    call(done && !success, asyncCtxFailureListener = new AsyncCtxResultListener<T>(listener, executor));
-    return this;
-  }
-
-  /**
-   * Registers the {@code listener} to be called asynchronously when the retry policy is exceeded and the result is a
-   * failure.
-   */
-  public synchronized FailsafeFuture<T> onFailureAsync(ResultListener<? super T, ? extends Throwable> listener) {
-    call(done && !success, asyncFailureListener = new AsyncResultListener<T>(listener));
-    return this;
-  }
-
-  /**
-   * Registers the {@code listener} to be called asynchronously when the retry policy is exceeded and the result is a
-   * failure.
-   */
-  public synchronized FailsafeFuture<T> onFailureAsync(ResultListener<? super T, ? extends Throwable> listener,
-      ExecutorService executor) {
-    call(done && !success, asyncFailureListener = new AsyncResultListener<T>(listener, executor));
-    return this;
-  }
-
-  /**
-   * Registers the {@code listener} to be called after a successful execution.
-   */
-  public synchronized FailsafeFuture<T> onSuccess(ContextualSuccessListener<? super T> listener) {
-    listeners.onSuccess(listener);
-    if (done && success)
-      listeners.handleSuccess(result, context);
-    return this;
-  }
-
-  /**
-   * Registers the {@code listener} to be called after a successful execution.
-   */
-  public synchronized FailsafeFuture<T> onSuccess(SuccessListener<? super T> listener) {
-    listeners.onSuccess(listener);
-    if (done && success)
-      listeners.handleSuccess(result);
-    return this;
-  }
-
-  /**
-   * Registers the {@code listener} to be called asynchronously after a successful execution.
-   */
-  public synchronized FailsafeFuture<T> onSuccessAsync(ContextualSuccessListener<? super T> listener) {
-    call(done && success,
-        asyncCtxSuccessListener = new AsyncCtxResultListener<T>(Listeners.resultListenerOf(listener)));
-    return this;
-  }
-
-  /**
-   * Registers the {@code listener} to be called asynchronously after a successful execution.
-   */
-  public synchronized FailsafeFuture<T> onSuccessAsync(ContextualSuccessListener<? super T> listener,
-      ExecutorService executor) {
-    call(done && success,
-        asyncCtxSuccessListener = new AsyncCtxResultListener<T>(Listeners.resultListenerOf(listener), executor));
-    return this;
-  }
-
-  /**
-   * Registers the {@code listener} to be called asynchronously after a successful execution.
-   */
-  public synchronized FailsafeFuture<T> onSuccessAsync(SuccessListener<? super T> listener) {
-    call(done && success, asyncSuccessListener = new AsyncResultListener<T>(Listeners.resultListenerOf(listener)));
-    return this;
-  }
-
-  /**
-   * Registers the {@code listener} to be called asynchronously after a successful execution.
-   */
-  public synchronized FailsafeFuture<T> onSuccessAsync(SuccessListener<? super T> listener, ExecutorService executor) {
-    call(done && success,
-        asyncSuccessListener = new AsyncResultListener<T>(Listeners.resultListenerOf(listener), executor));
-    return this;
-  }
-
-  synchronized void complete(T result, Throwable failure, boolean success) {
-    this.result = result;
-    this.failure = failure;
-    this.success = success;
     done = true;
-    if (success)
-      AsyncListeners.call(asyncSuccessListener, asyncCtxSuccessListener, result, failure, context, scheduler);
-    else
-      AsyncListeners.call(asyncFailureListener, asyncCtxFailureListener, result, failure, context, scheduler);
-    AsyncListeners.call(asyncCompleteListener, asyncCtxCompleteListener, result, failure, context, scheduler);
-    listeners.complete(result, failure, context, success);
+    if (completableFuture != null)
+      completeFuture();
     circuit.close();
   }
 
-  void inject(ExecutionContext context) {
-    this.context = context;
+  void inject(java.util.concurrent.CompletableFuture<T> completableFuture) {
+    this.completableFuture = completableFuture;
   }
 
-  void setFuture(Future<T> delegate) {
+  void inject(Future<T> delegate) {
     this.delegate = delegate;
   }
 
-  private void call(boolean condition, AsyncCtxResultListener<T> listener) {
-    if (condition)
-      AsyncListeners.call(listener, result, failure, context, scheduler);
+  void inject(ExecutionContext execution) {
+    this.execution = execution;
   }
 
-  private void call(boolean condition, AsyncResultListener<T> listener) {
-    if (condition)
-      AsyncListeners.call(listener, result, failure, context, scheduler);
+  private void completeFuture() {
+    if (failure == null)
+      completableFuture.complete(result);
+    else
+      completableFuture.completeExceptionally(failure);
   }
 }

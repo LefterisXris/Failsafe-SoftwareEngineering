@@ -1,40 +1,38 @@
+/*
+ * Copyright 2016 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License
+ */
 package net.jodah.failsafe.internal;
 
 import net.jodah.failsafe.CircuitBreaker;
 import net.jodah.failsafe.CircuitBreaker.State;
 import net.jodah.failsafe.internal.util.CircularBitSet;
-import net.jodah.failsafe.internal.util.Ratio;
+import net.jodah.failsafe.util.Ratio;
 
-public class HalfOpenState implements CircuitState {
+public class HalfOpenState extends CircuitState {
   private final CircuitBreaker circuit;
-  private final Integer successThresh;
-  private final Integer failureThresh;
-  private final Ratio successRatio;
-  private final Ratio failureRatio;
-  private final int maxConcurrentExecutions;
-
-  private volatile int executions;
-  private volatile int successiveSuccesses;
-  private volatile int successiveFailures;
   private CircularBitSet bitSet;
 
   public HalfOpenState(CircuitBreaker circuit) {
     this.circuit = circuit;
-    this.successThresh = circuit.getSuccessThreshold();
-    this.failureThresh = circuit.getFailureThreshold();
-    this.successRatio = circuit.getSuccessThresholdRatio();
-    this.failureRatio = circuit.getFailureThresholdRatio();
-    maxConcurrentExecutions = maxConcurrentExecutions();
-
-    if (successRatio != null)
-      bitSet = new CircularBitSet(successRatio.denominator);
-    if (failureRatio != null)
-      bitSet = new CircularBitSet(failureRatio.denominator);
+    setSuccessThreshold(circuit.getSuccessThreshold() != null ? circuit.getSuccessThreshold()
+        : circuit.getFailureThreshold() != null ? circuit.getFailureThreshold() : ONE_OF_ONE);
   }
 
   @Override
   public boolean allowsExecution(CircuitBreakerStats stats) {
-    return stats.getCurrentExecutions() < maxConcurrentExecutions;
+    return stats.getCurrentExecutions() < maxConcurrentExecutions();
   }
 
   @Override
@@ -44,92 +42,74 @@ public class HalfOpenState implements CircuitState {
 
   @Override
   public synchronized void recordFailure() {
-    executions++;
-    successiveFailures++;
-    successiveSuccesses = 0;
-    if (bitSet != null)
-      bitSet.setNext(false);
+    bitSet.setNext(false);
     checkThreshold();
   }
 
   @Override
   public synchronized void recordSuccess() {
-    executions++;
-    successiveSuccesses++;
-    successiveFailures = 0;
-    if (bitSet != null)
-      bitSet.setNext(true);
+    bitSet.setNext(true);
     checkThreshold();
   }
 
-  /**
-   * Returns the max allowed concurrent executions.
-   */
-  int maxConcurrentExecutions() {
-    if (successRatio != null)
-      return successRatio.denominator;
-    else if (successThresh != null)
-      return successThresh;
-    else if (failureRatio != null)
-      return failureRatio.denominator;
-    else if (failureThresh != null)
-      return failureThresh;
-    else
-      return 1;
+  @Override
+  public void setFailureThreshold(Ratio threshold) {
+    if (circuit.getSuccessThreshold() == null)
+      bitSet = new CircularBitSet(threshold.denominator, bitSet);
+  }
+
+  @Override
+  public void setSuccessThreshold(Ratio threshold) {
+    bitSet = new CircularBitSet(threshold.denominator, bitSet);
   }
 
   /**
    * Checks to determine if a threshold has been met and the circuit should be opened or closed.
    * 
    * <p>
-   * When a success or failure ratio is configured, the circuit is opened or closed after the expected number of
-   * executions based on whether the ratio was exceeded.
+   * If a success ratio is configured, the circuit is opened or closed after the expected number of executions based on
+   * whether the ratio was exceeded.
    * <p>
-   * If a success threshold is configured, the circuit is closed if the expected number of executions are successful
-   * else it's opened if a single execution fails.
+   * Else if a failure ratio is configured, the circuit is opened or closed after the expected number of executions
+   * based on whether the ratio was not exceeded.
    * <p>
-   * If a failure threshold is configured, the circuit is opened if the expected number of executions fails else it's
-   * closed if a single execution succeeds.
+   * Else when no thresholds are configured, the circuit opens or closes on a single failure or success.
    */
   synchronized void checkThreshold() {
-    // Handle success threshold ratio
-    if (successRatio != null && executions == successRatio.denominator) {
-      if (bitSet.positiveRatio() >= successRatio.ratio)
+    Ratio successRatio = circuit.getSuccessThreshold();
+    Ratio failureRatio = circuit.getFailureThreshold();
+
+    if (successRatio != null) {
+      if (bitSet.occupiedBits() == successRatio.denominator
+          || (successRatio.ratio == 1.0 && bitSet.positiveRatio() < 1.0))
+        if (bitSet.positiveRatio() >= successRatio.ratio)
+          circuit.close();
+        else
+          circuit.open();
+    } else if (failureRatio != null) {
+      if (bitSet.occupiedBits() == failureRatio.denominator
+          || (failureRatio.ratio == 1.0 && bitSet.negativeRatio() < 1.0))
+        if (bitSet.negativeRatio() >= failureRatio.ratio)
+          circuit.open();
+        else
+          circuit.close();
+    } else {
+      if (bitSet.positiveRatio() == 1)
         circuit.close();
       else
         circuit.open();
     }
+  }
 
-    // Handle success threshold
-    if (successThresh != null) {
-      if (successiveSuccesses == successThresh)
-        circuit.close();
-      else if (failureThresh == null && failureRatio == null && successiveFailures == 1)
-        circuit.open();
-    }
-
-    // Handle failure threshold ratio
-    if (failureRatio != null && executions == failureRatio.denominator) {
-      if (bitSet.negativeRatio() >= failureRatio.ratio)
-        circuit.open();
-      else
-        circuit.close();
-    }
-
-    // Handle failure threshold
-    if (failureThresh != null) {
-      if (successiveFailures == failureThresh)
-        circuit.open();
-      else if (successThresh == null && successRatio == null && successiveSuccesses == 1)
-        circuit.close();
-    }
-
-    // Handle no thresholds configured
-    if (successThresh == null && failureThresh == null && successRatio == null && failureRatio == null) {
-      if (successiveSuccesses == 1)
-        circuit.close();
-      else
-        circuit.open();
-    }
+  /**
+   * Returns the max allowed concurrent executions.
+   */
+  int maxConcurrentExecutions() {
+    if (circuit.getSuccessThreshold() != null)
+      return circuit.getSuccessThreshold().denominator;
+    else if (circuit.getFailureThreshold() != null)
+      return circuit.getFailureThreshold().denominator;
+    else
+      return 1;
   }
 }
